@@ -29,7 +29,8 @@ RSS_FEEDS = [
     "https://feeds.feedburner.com/TechCrunch/startups",
     "http://rss.tempo.co/nasional",
     "https://www.republika.co.id/rss/",
-    "https://news.detik.com/berita/rss"
+    "https://news.detik.com/berita/rss",
+    "https://www.tribunnews.com/rss"
 ]
 
 # --- Cache Configuration ---
@@ -148,14 +149,40 @@ def get_weather(city):
     """Fetches text-only weather from wttr.in for a given city."""
     url = f"https://wttr.in/{city}?T" # ?T for text-only output
     print(f"Fetching weather for {city} from {url}")
-    weather_data = fetch_url_with_retry(url)
-    if weather_data:
-        # wttr.in often includes ANSI escape codes; strip them for pure text
-        # This regex removes common ANSI color codes
-        import re
-        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-        return ansi_escape.sub('', weather_data).strip()
+    # Using a more robust retry logic here to handle the specific wttr.in issues
+    max_retries = 5
+    base_retry_delay_seconds = 2  # Start with a 2-second delay
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, timeout=10)
+            
+            # Check for the specific concurrency error message
+            if "This query is already being processed" in response.text:
+                print(f"Attempt {attempt + 1}: Query is already being processed. Retrying.")
+            elif response.status_code == 200:
+                # If we get a good response, return the content
+                import re
+                ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                return ansi_escape.sub('', response.text).strip()
+            else:
+                # Handle other non-200 responses
+                print(f"Attempt {attempt + 1}: Received status code {response.status_code}. Retrying.")
+
+        except requests.exceptions.RequestException as e:
+            # Handle connection errors and timeouts
+            print(f"Attempt {attempt + 1}: An error occurred: {e}")
+        
+        # If we're not on the last attempt, calculate the delay and wait
+        if attempt < max_retries - 1:
+            retry_delay = base_retry_delay_seconds * (2 ** attempt)
+            print(f"Retrying in {retry_delay} seconds...")
+            time.sleep(retry_delay)
+        else:
+            print("Max retries reached. Giving up.")
+            break
+            
     return "Weather data not available."
+
 
 def parse_rss_feed(url):
     """Fetches and parses an RSS feed."""
@@ -258,7 +285,7 @@ def generate_homepage_html(jakarta_weather, tokyo_weather, news_articles):
     
     # FIX: Updated hyperlink to include function name
     html_content += """        </ul>
-        <p><a href="/text-only-portal-function/news_archive.html">View All News (Last 72 Hours)</a></p>
+        <p><a href="/text-only-portal-function/news_archive.html">View All News (Last 24 Hours)</a></p>
     </div>
 
     <!-- Static Links Section from your original homepage.html -->
@@ -274,7 +301,7 @@ def generate_news_archive_html(news_articles):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>All News (Last 72 Hours)</title>
+    <title>All News (Last 24 Hours)</title>
     <style>
         body {{ font-family: monospace; line-height: 1.6; margin: 20px; background-color: #f0f0f0; color: #333; }}
         h1, h2 {{ color: #000; border-bottom: 1px solid #999; padding-bottom: 5px; margin-top: 20px; }}
@@ -286,26 +313,26 @@ def generate_news_archive_html(news_articles):
     </style>
 </head>
 <body>
-    <h1>All News from the Last 72 Hours</h1>
-    <p>This page lists all aggregated news articles from the past 72 hours.</p>
+    <h1>All News from the Last 24 Hours</h1>
+    <p>This page lists all aggregated news articles from the past 24 hours.</p>
     <p><a href="/text-only-portal-function/">Back to Homepage</a></p> <!-- Added at top for convenience -->
 
     <div class="section">
         <ul>
     """
     
-    # FIX: Make now and seventy_two_hours_ago timezone-aware (UTC) for comparison
+    # FIX: Make now and twenty_four_hours_ago timezone-aware (UTC) for comparison
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-    seventy_two_hours_ago = now - datetime.timedelta(hours=72)
+    twenty_four_hours_ago = now - datetime.timedelta(hours=24)
 
-    # Filter news for the last 72 hours
+    # Filter news for the last 24 hours
     recent_news = [
         article for article in news_articles 
-        if article['published'] and article['published'] >= seventy_two_hours_ago
+        if article['published'] and article['published'] >= twenty_four_hours_ago
     ]
 
     if not recent_news:
-        html_content += "            <li>No news found for the last 72 hours.</li>\n"
+        html_content += "            <li>No news found for the last 24 hours.</li>\n"
     else:
         for article in recent_news:
             # Format date for display, converting to Jakarta time
@@ -326,45 +353,40 @@ def generate_news_archive_html(news_articles):
 # --- Caching Functions ---
 
 def get_cached_content(file_name):
-    """Retrieves content from GCS cache if fresh, otherwise returns None."""
+    """
+    Retrieves content from GCS cache.
+    Returns a tuple: (content, is_stale)
+    """
     blob = cache_bucket.blob(file_name)
     
-    # Check if blob exists. If not, it's a cache miss.
     if not blob.exists():
         print(f"Cache miss: {file_name} does not exist.")
-        return None
+        return None, False
 
-    # FIX: Explicitly reload blob metadata to ensure 'updated' timestamp is fresh
-    # This is crucial for reliable timestamp checking, especially after an upload.
     try:
         blob.reload()
     except Exception as e:
         print(f"Error reloading blob metadata for {file_name}: {e}. Treating as cache miss.")
-        return None
+        return None, False
 
     last_modified_utc = blob.updated
     
-    # NEW CHECK: If last_modified_utc is None even after reload, treat as invalid cache
     if last_modified_utc is None:
         print(f"Cache miss: {file_name} exists but has no valid 'updated' timestamp after reload.")
-        return None
+        return None, False
 
     current_time_utc = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-    
     time_since_last_update = (current_time_utc - last_modified_utc).total_seconds()
     
-    print(f"DEBUG: Cache check for {file_name}:")
-    print(f"  Last Modified (UTC): {last_modified_utc.isoformat()}")
-    print(f"  Current Time (UTC):  {current_time_utc.isoformat()}")
-    print(f"  Time Since Update (s): {time_since_last_update:.2f}")
-    print(f"  Cache Expiration (s): {CACHE_EXPIRATION_SECONDS}")
-
-    if time_since_last_update > CACHE_EXPIRATION_SECONDS:
-        print(f"Cache expired for {file_name}. Last updated {time_since_last_update:.0f} seconds ago.")
-        return None
+    is_stale = time_since_last_update > CACHE_EXPIRATION_SECONDS
+    
+    if is_stale:
+        print(f"Cache is stale for {file_name}. Last updated {time_since_last_update:.0f} seconds ago.")
+        # Download and return the stale content
+        return blob.download_as_text(), True
     
     print(f"Cache hit for {file_name}. Last updated {time_since_last_update:.0f} seconds ago.")
-    return blob.download_as_text()
+    return blob.download_as_text(), False
 
 def update_cache(homepage_html, news_archive_html):
     """Uploads generated HTML content to GCS cache."""
@@ -390,10 +412,8 @@ def main_handler(request):
     Handles both HTTP requests (user) and Pub/Sub triggers (cron job).
     """
     # Check if the request is from a Pub/Sub push (cron job)
-    # Pub/Sub messages come as JSON in the request body
     if request.method == 'POST' and request.is_json:
         try:
-            # Decode Pub/Sub message (it's base64 encoded)
             envelope = request.get_json()
             if 'message' in envelope and 'data' in envelope['message']:
                 pubsub_message = json.loads(base64.b64decode(envelope['message']['data']).decode('utf-8'))
@@ -413,48 +433,31 @@ def main_handler(request):
                         return 'Failed to update cache.', 500
         except Exception as e:
             print(f"Error processing Pub/Sub message: {e}")
-            # Fall through to handle as a regular HTTP request if Pub/Sub parsing fails
     
     # Handle regular HTTP requests (user access)
     path = request.path if hasattr(request, 'path') else '/'
     
     # Normalize path to remove function name prefix if present
-    # This is crucial for correctly mapping the request path to the cache file name
     function_name_prefix = '/text-only-portal-function'
     if path.startswith(function_name_prefix):
         path = path[len(function_name_prefix):]
-        if not path: # If path was just /text-only-portal-function
+        if not path:
             path = '/'
 
     target_file = CACHE_HOMEPAGE_FILE if path == '/' else CACHE_NEWS_ARCHIVE_FILE
-
-    cached_content = get_cached_content(target_file)
+    
+    # Use the new caching function
+    cached_content, is_stale = get_cached_content(target_file)
 
     if cached_content:
+        # If cache is fresh or stale, return it immediately to the user
         return cached_content, 200, {'Content-Type': 'text/html'}
     else:
-        print(f"Cache stale or missing for {target_file}. Generating live content...")
-        # If cache is stale or missing, generate content live and update cache
-        jakarta_weather = get_weather("Jakarta")
-        tokyo_weather = get_weather("Tokyo")
-        all_news = get_all_news()
+        # If the cache is entirely missing, return a message and rely on the cron job
+        # to fill it. This prevents blocking a user's request for a long time.
+        print(f"Cache for {target_file} is completely missing. Awaiting next cron job.")
+        return "Content is not yet available. Please check back in a few minutes.", 200, {'Content-Type': 'text/html'}
 
-        if path == '/news_archive.html':
-            html_output = generate_news_archive_html(all_news)
-        else: # Default to homepage
-            html_output = generate_homepage_html(jakarta_weather, tokyo_weather, all_news)
-        
-        # Asynchronously update cache (don't block user response)
-        # In a real-world scenario, you might want to trigger a background task
-        # or rely on the next cron job to update. For simplicity here, we'll
-        # update it directly, but note this adds latency to the first user
-        # hitting a stale cache.
-        update_cache(
-            generate_homepage_html(jakarta_weather, tokyo_weather, all_news),
-            generate_news_archive_html(all_news)
-        )
-        
-        return html_output, 200, {'Content-Type': 'text/html'}
 
 # --- Example Usage (for local testing/demonstration) ---
 # This part is for local testing and won't run in Cloud Functions directly
@@ -468,6 +471,15 @@ if __name__ == '__main__':
 
         def exists(self):
             return self._content is not None
+
+        def reload(self):
+            # For testing purposes, we'll simulate a stale cache by pretending it's old
+            # and a fresh cache by pretending it's new.
+            if self.name == CACHE_HOMEPAGE_FILE:
+                # Let's make the homepage stale for this test
+                self.updated = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc) - datetime.timedelta(minutes=15)
+            else:
+                self.updated = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
 
         def download_as_text(self):
             return self._content
@@ -495,24 +507,26 @@ if __name__ == '__main__':
     storage_client = MockStorageClient(CACHE_BUCKET_NAME)
     cache_bucket = storage_client.bucket(CACHE_BUCKET_NAME)
 
-    # Simulate a cron job update
+    # Simulate a cron job update to initially populate the cache
     print("--- Simulating Cron Job Cache Update ---")
     class MockPubSubRequest:
         def __init__(self):
             self.method = 'POST'
             self.is_json = True
         def get_json(self):
-            # Simulate a Pub/Sub message
             return {
                 'message': {
                     'data': base64.b64encode(json.dumps({'action': 'update_cache'}).encode('utf-8')).decode('utf-8')
                 }
             }
+    
+    # Run a cache update to create a mock cached file
+    # Note: This will still hit the real wttr.in and RSS feeds during this local test run
     main_handler(MockPubSubRequest())
     print("-" * 30)
 
-    # Simulate a user request for the homepage
-    print("--- Simulating User Request (Homepage) ---")
+    # Simulate a user request for the homepage (which will now be stale in our mock)
+    print("--- Simulating User Request (Homepage with stale cache) ---")
     class MockHttpRequest:
         def __init__(self, path):
             self.path = path
@@ -523,18 +537,19 @@ if __name__ == '__main__':
     
     homepage_request = MockHttpRequest('/')
     homepage_content, status, headers = main_handler(homepage_request)
-    with open("index_cached_test.html", "w", encoding="utf-8") as f:
-        f.write(homepage_content)
-    print("Homepage (index_cached_test.html) generated successfully.")
+    # The output should be the stale cached content immediately
+    print(f"Status: {status}")
+    print("Content returned to user:")
+    print(homepage_content[:100] + "...")
     print("-" * 30)
 
     # Simulate a user request for the news archive
-    print("--- Simulating User Request (News Archive) ---")
+    print("--- Simulating User Request (News Archive with fresh cache) ---")
     news_archive_request = MockHttpRequest('/news_archive.html')
     news_archive_content, status, headers = main_handler(news_archive_request)
-    with open("news_archive_cached_test.html", "w", encoding="utf-8") as f:
-        f.write(news_archive_content)
-    print("News Archive Page (news_archive_cached_test.html) generated successfully.")
+    # The output should be fresh cached content
+    print(f"Status: {status}")
+    print("Content returned to user:")
+    print(news_archive_content[:100] + "...")
     print("-" * 30)
-    print("You can open index_cached_test.html and news_archive_cached_test.html in your browser or view them with a text-only browser like Lynx.")
 
