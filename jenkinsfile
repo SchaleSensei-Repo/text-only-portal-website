@@ -5,6 +5,11 @@
 pipeline {
     agent any // This runs the pipeline on any available Jenkins agent
 
+    // Add SCM polling to trigger the build every 5 minutes if there's a change
+    triggers {
+        pollSCM('H/5 * * * *')
+    }
+
     environment {
         // Define environment variables for the deployment
         // These can be configured in Jenkins credentials for security
