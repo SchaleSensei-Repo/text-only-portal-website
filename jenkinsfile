@@ -41,8 +41,12 @@ pipeline {
                     echo 'Deploying Cloud Function to GCP...'
                     // The withCredentials block securely provides the service account key
                     withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
-                        // Execute the gcloud command using 'bat' for a Windows agent, all on a single line
-                        bat "gcloud functions deploy ${env.FUNCTION_NAME} --runtime ${env.RUNTIME} --region ${env.REGION} --trigger-http --set-env-vars=CACHE_BUCKET_NAME=${env.CACHE_BUCKET_NAME} --project=${env.PROJECT_ID} --source=. --entry-point=main_handler --key-file=${GCP_KEY_FILE}"
+                        // First, authenticate with the service account key.
+                        // The 'gcloud auth activate-service-account' command uses the key file.
+                        bat "gcloud auth activate-service-account --key-file=%GCP_KEY_FILE%"
+                        
+                        // Then, deploy the function. The 'gcloud' CLI is now authenticated.
+                        bat "gcloud functions deploy %FUNCTION_NAME% --runtime %RUNTIME% --region %REGION% --trigger-http --set-env-vars=CACHE_BUCKET_NAME=%CACHE_BUCKET_NAME% --project=%PROJECT_ID% --source=. --entry-point=main_handler"
                     }
                 }
             }
