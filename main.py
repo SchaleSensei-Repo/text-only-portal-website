@@ -285,7 +285,7 @@ def generate_homepage_html(jakarta_weather, tokyo_weather, news_articles):
     
     # FIX: Updated hyperlink to include function name
     html_content += """        </ul>
-        <p><a href="/text-only-portal-function/news_archive.html">View All News (Last 24 Hours)</a></p>
+        <p><a href="/text-only-portal-function/news_archive.html">View All News (Last 72 Hours)</a></p>
     </div>
 
     <!-- Static Links Section from your original homepage.html -->
@@ -301,7 +301,7 @@ def generate_news_archive_html(news_articles):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>All News (Last 24 Hours)</title>
+    <title>All News (Last 72 Hours)</title>
     <style>
         body {{ font-family: monospace; line-height: 1.6; margin: 20px; background-color: #f0f0f0; color: #333; }}
         h1, h2 {{ color: #000; border-bottom: 1px solid #999; padding-bottom: 5px; margin-top: 20px; }}
@@ -313,26 +313,26 @@ def generate_news_archive_html(news_articles):
     </style>
 </head>
 <body>
-    <h1>All News from the Last 24 Hours</h1>
-    <p>This page lists all aggregated news articles from the past 24 hours.</p>
+    <h1>All News from the Last 72 Hours</h1>
+    <p>This page lists all aggregated news articles from the past 72 hours.</p>
     <p><a href="/text-only-portal-function/">Back to Homepage</a></p> <!-- Added at top for convenience -->
 
     <div class="section">
         <ul>
     """
     
-    # FIX: Make now and twenty_four_hours_ago timezone-aware (UTC) for comparison
+    # FIX: Make now and seventy_two_hours_ago timezone-aware (UTC) for comparison
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-    twenty_four_hours_ago = now - datetime.timedelta(hours=24)
+    seventy_two_hours_ago = now - datetime.timedelta(hours=72)
 
-    # Filter news for the last 24 hours
+    # Filter news for the last 72 hours
     recent_news = [
         article for article in news_articles 
-        if article['published'] and article['published'] >= twenty_four_hours_ago
+        if article['published'] and article['published'] >= seventy_two_hours_ago
     ]
 
     if not recent_news:
-        html_content += "            <li>No news found for the last 24 hours.</li>\n"
+        html_content += "            <li>No news found for the last 72 hours.</li>\n"
     else:
         for article in recent_news:
             # Format date for display, converting to Jakarta time
