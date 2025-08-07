@@ -34,7 +34,7 @@ pipeline {
             }
         }
 
-        // Stage 3: Deploy the function to Google Cloud
+        // Stage 3: Deploy to GCP
         stage('Deploy to GCP') {
             steps {
                 script {
@@ -42,11 +42,11 @@ pipeline {
                     // The withCredentials block securely provides the service account key
                     withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
                         // First, authenticate with the service account key.
-                        // The 'gcloud auth activate-service-account' command uses the key file.
                         bat "gcloud auth activate-service-account --key-file=%GCP_KEY_FILE%"
                         
-                        // Then, deploy the function. The 'gcloud' CLI is now authenticated.
-                        bat "gcloud functions deploy %FUNCTION_NAME% --runtime %RUNTIME% --region %REGION% --trigger-http --set-env-vars=CACHE_BUCKET_NAME=%CACHE_BUCKET_NAME% --project=%PROJECT_ID% --source=. --entry-point=main_handler"
+                        // Then, deploy the function. The '--allow-unauthenticated' flag automatically
+                        // answers the prompt from the gcloud CLI.
+                        bat "gcloud functions deploy %FUNCTION_NAME% --runtime %RUNTIME% --region %REGION% --trigger-http --set-env-vars=CACHE_BUCKET_NAME=%CACHE_BUCKET_NAME% --project=%PROJECT_ID% --source=. --entry-point=main_handler --allow-unauthenticated"
                     }
                 }
             }
