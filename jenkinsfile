@@ -1,0 +1,63 @@
+// Jenkinsfile
+// This file defines the CI/CD pipeline for deploying the Cloud Function.
+// It uses Jenkins's declarative pipeline syntax, designed for a Windows agent.
+
+pipeline {
+    agent any // This runs the pipeline on any available Jenkins agent
+
+    environment {
+        // Define environment variables for the deployment
+        // These can be configured in Jenkins credentials for security
+        PROJECT_ID = 'textonlyportalwithcache'
+        FUNCTION_NAME = 'text-only-portal-function'
+        RUNTIME = 'python39' // Update this to a newer Python version if you wish
+        REGION = 'asia-southeast2'
+        CACHE_BUCKET_NAME = 'schale-text-only-portal-cache'
+        EMAIL_RECIPIENTS = 'ashlovedawn@gmail.com' // Using the email from your example
+    }
+
+    stages {
+        // Stage 1: Checkout the source code from GitHub
+        stage('Checkout') {
+            steps {
+                // 'scm' refers to the Source Code Management configuration of the Jenkins job
+                checkout scm
+            }
+        }
+
+        // Stage 2: Run tests (a placeholder for now)
+        // In a real-world scenario, this is where you'd run 'pytest' or other test commands
+        stage('Test') {
+            steps {
+                echo 'Running tests...'
+                // bat 'python -m pytest' // Uncomment this and add a test framework if needed
+            }
+        }
+
+        // Stage 3: Deploy the function to Google Cloud
+        stage('Deploy to GCP') {
+            steps {
+                script {
+                    echo 'Deploying Cloud Function to GCP...'
+                    // Execute the gcloud command using 'bat' for a Windows agent
+                    bat "gcloud functions deploy ${env.FUNCTION_NAME} \
+                       --runtime ${env.RUNTIME} \
+                       --region ${env.REGION} \
+                       --trigger-http \
+                       --set-env-vars=CACHE_BUCKET_NAME=${env.CACHE_BUCKET_NAME} \
+                       --project=${env.PROJECT_ID}"
+                }
+            }
+        }
+    }
+
+    // This post block will run after all stages are complete, regardless of the outcome
+    post {
+        always {
+            // This mail step will send an email with the build status to the configured recipients
+            mail to: "${env.EMAIL_RECIPIENTS}",
+                 subject: "Build ${currentBuild.currentResult}: Job ${env.JOB_NAME} [#${env.BUILD_NUMBER}]",
+                 body: "See details at: ${env.BUILD_URL}"
+        }
+    }
+}
