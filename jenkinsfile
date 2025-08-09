@@ -38,19 +38,8 @@ pipeline {
                         // Activate the service account
                         bat "gcloud auth activate-service-account --key-file=%GCP_KEY_FILE%"
                         
-                        // Deploy the Cloud Function with Pub/Sub trigger
-                        bat """
-                            gcloud functions deploy %FUNCTION_NAME% \\
-                            --project=%PROJECT_ID% \\
-                            --runtime=%RUNTIME% \\
-                            --region=%REGION% \\
-                            --source=. \\
-                            --entry-point=update_static_site \\
-                            --trigger-topic=generate-portal-trigger \\
-                            --service-account=%SERVICE_ACCOUNT_NAME%@%PROJECT_ID%.iam.gserviceaccount.com \\
-                            --set-env-vars=GCS_BUCKET_NAME=%GCS_BUCKET_NAME% \\
-                            --timeout=300s
-                        """
+                        // Deploy the Cloud Function with Pub/Sub trigger. The entire command is now on a single line.
+                        bat "gcloud functions deploy %FUNCTION_NAME% --project=%PROJECT_ID% --runtime=%RUNTIME% --region=%REGION% --source=. --entry-point=update_static_site --trigger-topic=generate-portal-trigger --service-account=%SERVICE_ACCOUNT_NAME%@%PROJECT_ID%.iam.gserviceaccount.com --set-env-vars=GCS_BUCKET_NAME=%GCS_BUCKET_NAME% --timeout=300s"
                     }
                 }
             }
@@ -64,19 +53,8 @@ pipeline {
                         // The Pub/Sub topic created by the Cloud Function deployment
                         def pubsub_topic = "projects/${env.PROJECT_ID}/topics/generate-portal-trigger"
                         
-                        // Command to create or update the cron job
-                        bat """
-                            gcloud scheduler jobs create pubsub %CRON_JOB_NAME% \\
-                            --project=%PROJECT_ID% \\
-                            --schedule="*/10 * * * *" \\
-                            --topic=%pubsub_topic% \\
-                            --message-body="{\\"action\\": \\"update_cache\\"}" || \\
-                            gcloud scheduler jobs update pubsub %CRON_JOB_NAME% \\
-                            --project=%PROJECT_ID% \\
-                            --schedule="*/10 * * * *" \\
-                            --topic=%pubsub_topic% \\
-                            --message-body="{\\"action\\": \\"update_cache\\"}"
-                        """
+                        // Command to create or update the cron job. Consolidated to a single line.
+                        bat "gcloud scheduler jobs create pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\" || gcloud scheduler jobs update pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
                     }
                 }
             }
@@ -87,20 +65,11 @@ pipeline {
                 script {
                     echo 'Configuring GCS bucket for static website hosting...'
                     withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
-                        // Set the website configuration for the bucket
-                        bat """
-                            gcloud storage buckets update gs://%GCS_BUCKET_NAME% \\
-                            --project=%PROJECT_ID% \\
-                            --web-main-page-suffix=index.html
-                        """
+                        // Set the website configuration for the bucket. Consolidated to a single line.
+                        bat "gcloud storage buckets update gs://%GCS_BUCKET_NAME% --project=%PROJECT_ID% --web-main-page-suffix=index.html"
                         
-                        // Grant public read access to the bucket
-                        bat """
-                            gcloud storage buckets add-iam-policy-binding gs://%GCS_BUCKET_NAME% \\
-                            --project=%PROJECT_ID% \\
-                            --member=allUsers \\
-                            --role=roles/storage.objectViewer
-                        """
+                        // Grant public read access to the bucket. Consolidated to a single line.
+                        bat "gcloud storage buckets add-iam-policy-binding gs://%GCS_BUCKET_NAME% --project=%PROJECT_ID% --member=allUsers --role=roles/storage.objectViewer"
                     }
                 }
             }
