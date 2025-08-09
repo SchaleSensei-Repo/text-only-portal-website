@@ -34,22 +34,11 @@ pipeline {
         stage('Create Pub/Sub Topic') {
             steps {
                 script {
-                    echo 'Creating or ensuring the Pub/Sub topic exists...'
+                    echo 'Ensuring the Pub/Sub topic exists...'
                     withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
-                        // Activate the service account
                         bat "gcloud auth activate-service-account --key-file=%GCP_KEY_FILE%"
-
-                        // Try to delete the topic first, to ensure a clean state.
-                        try {
-                            echo "Attempting to delete existing Pub/Sub topic: ${env.PUB_SUB_TOPIC}"
-                            bat "gcloud pubsub topics delete %PUB_SUB_TOPIC% --project=%PROJECT_ID%"
-                        } catch (Exception e) {
-                            echo "Topic ${env.PUB_SUB_TOPIC} did not exist or could not be deleted. Proceeding to create it."
-                        }
-
-                        // Create the Pub/Sub topic.
-                        echo "Creating new Pub/Sub topic: ${env.PUB_SUB_TOPIC}"
-                        bat "gcloud pubsub topics create %PUB_SUB_TOPIC% --project=%PROJECT_ID%"
+                        // Create the topic. The `|| true` ensures the step doesn't fail if the topic already exists.
+                        bat "gcloud pubsub topics create %PUB_SUB_TOPIC% --project=%PROJECT_ID% || true"
                     }
                 }
             }
@@ -88,25 +77,9 @@ pipeline {
                     echo 'Setting up Cloud Scheduler cron job...'
                     withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
                         def pubsub_topic = "projects/${env.PROJECT_ID}/topics/${env.PUB_SUB_TOPIC}"
-                        
-                        // Check if the cron job exists first.
-                        def jobExists = false
-                        try {
-                            def result = bat(script: "gcloud scheduler jobs describe %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION%", returnStatus: true, label: "Check if cron job exists")
-                            if (result == 0) {
-                                jobExists = true
-                            }
-                        } catch (Exception e) {
-                            echo "Cron job does not exist."
-                        }
-
-                        if (jobExists) {
-                            echo "Cron job already exists. Updating it."
-                            bat "gcloud scheduler jobs update pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
-                        } else {
-                            echo "Cron job does not exist. Creating a new one."
-                            bat "gcloud scheduler jobs create pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
-                        }
+                        // Use a single command to either update or create the job.
+                        // It will try to update first. If that fails (because it doesn't exist), it will create it.
+                        bat "gcloud scheduler jobs update pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\"  ||  gcloud scheduler jobs create pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
                     }
                 }
             }
