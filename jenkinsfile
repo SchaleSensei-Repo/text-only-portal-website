@@ -1,67 +1,120 @@
 // Jenkinsfile
-// This file defines the CI/CD pipeline for deploying the Cloud Function.
-// It uses Jenkins's declarative pipeline syntax, designed for a Windows agent.
+// This file defines the CI/CD pipeline for deploying a static website to Google Cloud Storage.
+// A Cloud Function is used to generate the site, and a Cloud Scheduler cron job triggers it.
 
 pipeline {
-    agent any // This runs the pipeline on any available Jenkins agent
+    agent any
 
-    // Add SCM polling to trigger the build every 5 minutes if there's a change
+    // SCM polling to trigger a new build every 5 minutes if there's a change
     triggers {
         pollSCM('H/5 * * * *')
     }
 
     environment {
         // Define environment variables for the deployment
-        // These can be configured in Jenkins credentials for security
         PROJECT_ID = 'textonlyportalwithcache'
-        FUNCTION_NAME = 'text-only-portal-function'
+        GCS_BUCKET_NAME = 'schale-text-only-portal-cache' // The bucket for your static site
+        FUNCTION_NAME = 'text-only-portal-generator' // The new function name
         RUNTIME = 'python39' // Update this to a newer Python version if you wish
         REGION = 'asia-southeast2'
-        CACHE_BUCKET_NAME = 'schale-text-only-portal-cache'
-        EMAIL_RECIPIENTS = 'ashlovedawn@gmail.com' // Using the email from your example
+        CRON_JOB_NAME = 'text-only-portal-cron'
+        SERVICE_ACCOUNT_NAME = 'jenkins-butler'
+        EMAIL_RECIPIENTS = 'ashlovedawn@gmail.com'
     }
 
     stages {
-        // Stage 1: Checkout the source code from GitHub
-        stage('Checkout') {
+        stage('Clean and Checkout') {
             steps {
-                // 'scm' refers to the Source Code Management configuration of the Jenkins job
+                cleanWs()
                 checkout scm
             }
         }
 
-        // Stage 2: Run tests (a placeholder for now)
-        // In a real-world scenario, this is where you'd run 'pytest' or other test commands
-        stage('Test') {
+        stage('Deploy Generator Cloud Function') {
             steps {
-                echo 'Running tests...'
-                // bat 'python -m pytest' // Uncomment this and add a test framework if needed
+                script {
+                    echo 'Deploying the static site generator Cloud Function...'
+                    withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
+                        // Activate the service account
+                        bat "gcloud auth activate-service-account --key-file=%GCP_KEY_FILE%"
+                        
+                        // Deploy the Cloud Function with Pub/Sub trigger
+                        bat """
+                            gcloud functions deploy %FUNCTION_NAME% \\
+                            --project=%PROJECT_ID% \\
+                            --runtime=%RUNTIME% \\
+                            --region=%REGION% \\
+                            --source=. \\
+                            --entry-point=update_static_site \\
+                            --trigger-topic=generate-portal-trigger \\
+                            --service-account=%SERVICE_ACCOUNT_NAME%@%PROJECT_ID%.iam.gserviceaccount.com \\
+                            --set-env-vars=GCS_BUCKET_NAME=%GCS_BUCKET_NAME% \\
+                            --timeout=300s
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Configure Cloud Scheduler Cron Job') {
+            steps {
+                script {
+                    echo 'Setting up Cloud Scheduler cron job...'
+                    withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
+                        // The Pub/Sub topic created by the Cloud Function deployment
+                        def pubsub_topic = "projects/${env.PROJECT_ID}/topics/generate-portal-trigger"
+                        
+                        // Command to create or update the cron job
+                        bat """
+                            gcloud scheduler jobs create pubsub %CRON_JOB_NAME% \\
+                            --project=%PROJECT_ID% \\
+                            --schedule="*/10 * * * *" \\
+                            --topic=%pubsub_topic% \\
+                            --message-body="{\\"action\\": \\"update_cache\\"}" || \\
+                            gcloud scheduler jobs update pubsub %CRON_JOB_NAME% \\
+                            --project=%PROJECT_ID% \\
+                            --schedule="*/10 * * * *" \\
+                            --topic=%pubsub_topic% \\
+                            --message-body="{\\"action\\": \\"update_cache\\"}"
+                        """
+                    }
+                }
             }
         }
 
-        // Stage 3: Deploy to GCP
-        stage('Deploy to GCP') {
+        stage('Configure GCS Static Website') {
             steps {
                 script {
-                    echo 'Deploying Cloud Function to GCP...'
-                    // The withCredentials block securely provides the service account key
+                    echo 'Configuring GCS bucket for static website hosting...'
                     withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
-                        // First, authenticate with the service account key.
-                        bat "gcloud auth activate-service-account --key-file=%GCP_KEY_FILE%"
+                        // Set the website configuration for the bucket
+                        bat """
+                            gcloud storage buckets update gs://%GCS_BUCKET_NAME% \\
+                            --project=%PROJECT_ID% \\
+                            --web-main-page-suffix=index.html
+                        """
                         
-                        // Then, deploy the function. The '--allow-unauthenticated' flag automatically
-                        // answers the prompt from the gcloud CLI.
-                        bat "gcloud functions deploy %FUNCTION_NAME% --runtime %RUNTIME% --region %REGION% --trigger-http --set-env-vars=CACHE_BUCKET_NAME=%CACHE_BUCKET_NAME% --project=%PROJECT_ID% --source=. --entry-point=main_handler --allow-unauthenticated"
+                        // Grant public read access to the bucket
+                        bat """
+                            gcloud storage buckets add-iam-policy-binding gs://%GCS_BUCKET_NAME% \\
+                            --project=%PROJECT_ID% \\
+                            --member=allUsers \\
+                            --role=roles/storage.objectViewer
+                        """
                     }
                 }
             }
         }
     }
 
-    // This post block will run after all stages are complete, regardless of the outcome
     post {
+        success {
+            echo "✅ Build succeeded. Static site deployment is complete."
+        }
+        failure {
+            echo "❌ Build failed. Check the logs for errors."
+        }
         always {
-            // This mail step will send an email with the build status to the configured recipients
             mail to: "${env.EMAIL_RECIPIENTS}",
                  subject: "Build ${currentBuild.currentResult}: Job ${env.JOB_NAME} [#${env.BUILD_NUMBER}]",
                  body: "See details at: ${env.BUILD_URL}"
