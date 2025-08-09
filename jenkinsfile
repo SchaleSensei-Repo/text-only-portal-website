@@ -20,6 +20,7 @@ pipeline {
         CRON_JOB_NAME = 'text-only-portal-cron'
         SERVICE_ACCOUNT_NAME = 'jenkins-butler'
         EMAIL_RECIPIENTS = 'ashlovedawn@gmail.com'
+        PUB_SUB_TOPIC = 'generate-portal-trigger'
     }
 
     stages {
@@ -30,16 +31,28 @@ pipeline {
             }
         }
 
+        stage('Create Pub/Sub Topic') {
+            steps {
+                script {
+                    echo 'Creating or ensuring the Pub/Sub topic exists...'
+                    withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
+                        // Activate the service account
+                        bat "gcloud auth activate-service-account --key-file=%GCP_KEY_FILE%"
+                        
+                        // Create the Pub/Sub topic. The `|| true` makes the step succeed even if the topic already exists.
+                        bat "gcloud pubsub topics create %PUB_SUB_TOPIC% --project=%PROJECT_ID% || true"
+                    }
+                }
+            }
+        }
+
         stage('Deploy Generator Cloud Function') {
             steps {
                 script {
                     echo 'Deploying the static site generator Cloud Function...'
                     withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
-                        // Activate the service account
-                        bat "gcloud auth activate-service-account --key-file=%GCP_KEY_FILE%"
-                        
-                        // Deploy the Cloud Function with Pub/Sub trigger. The entire command is now on a single line.
-                        bat "gcloud functions deploy %FUNCTION_NAME% --project=%PROJECT_ID% --runtime=%RUNTIME% --region=%REGION% --source=. --entry-point=update_static_site --trigger-topic=generate-portal-trigger --service-account=%SERVICE_ACCOUNT_NAME%@%PROJECT_ID%.iam.gserviceaccount.com --set-env-vars=GCS_BUCKET_NAME=%GCS_BUCKET_NAME% --timeout=300s"
+                        // The entire command is now on a single line.
+                        bat "gcloud functions deploy %FUNCTION_NAME% --project=%PROJECT_ID% --runtime=%RUNTIME% --region=%REGION% --source=. --entry-point=update_static_site --trigger-topic=%PUB_SUB_TOPIC% --service-account=%SERVICE_ACCOUNT_NAME%@%PROJECT_ID%.iam.gserviceaccount.com --set-env-vars=GCS_BUCKET_NAME=%GCS_BUCKET_NAME% --timeout=300s"
                     }
                 }
             }
@@ -51,7 +64,7 @@ pipeline {
                     echo 'Setting up Cloud Scheduler cron job...'
                     withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
                         // The Pub/Sub topic created by the Cloud Function deployment
-                        def pubsub_topic = "projects/${env.PROJECT_ID}/topics/generate-portal-trigger"
+                        def pubsub_topic = "projects/${env.PROJECT_ID}/topics/${env.PUB_SUB_TOPIC}"
                         
                         // Command to create or update the cron job. Consolidated to a single line.
                         bat "gcloud scheduler jobs create pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\" || gcloud scheduler jobs update pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
