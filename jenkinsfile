@@ -36,9 +36,21 @@ pipeline {
                 script {
                     echo 'Ensuring the Pub/Sub topic exists...'
                     withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
+                        // Activate the service account
                         bat "gcloud auth activate-service-account --key-file=%GCP_KEY_FILE%"
-                        // Create the topic. The `|| true` ensures the step doesn't fail if the topic already exists.
-                        bat "gcloud pubsub topics create %PUB_SUB_TOPIC% --project=%PROJECT_ID% || true"
+                        
+                        // Check if the topic exists by listing topics and filtering.
+                        def topicExists = false
+                        def output = bat(script: "gcloud pubsub topics list --filter=\"name:%PUB_SUB_TOPIC%\" --project=%PROJECT_ID%", returnStdout: true, label: "Check if Pub/Sub topic exists")
+                        if (output.trim()) {
+                            echo "Pub/Sub topic '${env.PUB_SUB_TOPIC}' already exists."
+                            topicExists = true
+                        }
+
+                        if (!topicExists) {
+                             echo "Pub/Sub topic '${env.PUB_SUB_TOPIC}' does not exist. Creating it."
+                            bat "gcloud pubsub topics create %PUB_SUB_TOPIC% --project=%PROJECT_ID%"
+                        }
                     }
                 }
             }
@@ -77,9 +89,27 @@ pipeline {
                     echo 'Setting up Cloud Scheduler cron job...'
                     withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
                         def pubsub_topic = "projects/${env.PROJECT_ID}/topics/${env.PUB_SUB_TOPIC}"
-                        // Use a single command to either update or create the job.
-                        // It will try to update first. If that fails (because it doesn't exist), it will create it.
-                        bat "gcloud scheduler jobs update pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\"  ||  gcloud scheduler jobs create pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
+                        
+                        // Check if the cron job exists first using a `returnStatus` check.
+                        def jobExists = false
+                        try {
+                            // This command will return status 0 if the job exists.
+                            // We use `errorIgnored: true` to prevent the build from failing on the `NOT_FOUND` error.
+                            def exitCode = bat(script: "gcloud scheduler jobs describe %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION%", returnStatus: true, errorIgnored: true)
+                            if (exitCode == 0) {
+                                jobExists = true
+                            }
+                        } catch (Exception e) {
+                            echo "Caught exception while checking for cron job. Assuming it doesn't exist."
+                        }
+
+                        if (jobExists) {
+                            echo "Cron job already exists. Updating it."
+                            bat "gcloud scheduler jobs update pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
+                        } else {
+                            echo "Cron job does not exist. Creating a new one."
+                            bat "gcloud scheduler jobs create pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
+                        }
                     }
                 }
             }
