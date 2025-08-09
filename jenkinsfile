@@ -34,13 +34,15 @@ pipeline {
         stage('Create Pub/Sub Topic') {
             steps {
                 script {
-                    echo 'Creating or ensuring the Pub/Sub topic exists...'
+                    echo 'Creating the Pub/Sub topic...'
                     withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
                         // Activate the service account
                         bat "gcloud auth activate-service-account --key-file=%GCP_KEY_FILE%"
                         
-                        // Create the Pub/Sub topic. The `|| true` makes the step succeed even if the topic already exists.
-                        bat "gcloud pubsub topics create %PUB_SUB_TOPIC% --project=%PROJECT_ID% || true"
+                        // Create the Pub/Sub topic. This will fail if the topic already exists.
+                        // You can safely re-run this stage after the first success, but the build will fail.
+                        // This is intentional to ensure the topic creation is a one-time setup.
+                        bat "gcloud pubsub topics create %PUB_SUB_TOPIC% --project=%PROJECT_ID%"
                     }
                 }
             }
