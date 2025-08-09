@@ -3,14 +3,14 @@ import feedparser
 import datetime
 import time
 import os
-import json # For parsing Pub/Sub messages
-import base64 # For decoding Pub/Sub messages
+import json
+import base64
 
 # Import Google Cloud Storage client library
 from google.cloud import storage
 
 # --- Configuration ---
-# List of RSS feed URLs (expand this to your 20 diverse sources)
+# List of RSS feed URLs
 RSS_FEEDS = [
     "http://rss.cnn.com/rss/cnn_topstories.rss",
     "http://feeds.bbci.co.uk/news/world/rss.xml",
@@ -23,9 +23,9 @@ RSS_FEEDS = [
     "https://www.engadget.com/rss.xml",
     "https://www.cnet.com/rss/news/",
     "https://www.zdnet.com/news/rss.xml",
-    "https://www.antaranews.com/rss/terkini", # Example Indonesian news
-    "https://www.japantimes.co.jp/feed/", # Example Japanese news
-    "https://mainichi.jp/rss/etc/mainichi-e.rss", # Example Japanese news
+    "https://www.antaranews.com/rss/terkini",
+    "https://www.japantimes.co.jp/feed/",
+    "https://mainichi.jp/rss/etc/mainichi-e.rss",
     "https://feeds.feedburner.com/TechCrunch/startups",
     "http://rss.tempo.co/nasional",
     "https://www.republika.co.id/rss/",
@@ -33,16 +33,13 @@ RSS_FEEDS = [
     "https://www.tribunnews.com/rss"
 ]
 
-# --- Cache Configuration ---
-# IMPORTANT: Replace 'YOUR_GCS_BUCKET_NAME' with the actual name of your Cloud Storage bucket
-CACHE_BUCKET_NAME = os.environ.get('CACHE_BUCKET_NAME', 'schale-text-only-portal-cache')
-CACHE_HOMEPAGE_FILE = "index.html"
-CACHE_NEWS_ARCHIVE_FILE = "news_archive.html"
-CACHE_EXPIRATION_SECONDS = 60 * 10 # 10 minutes
+# IMPORTANT: Replace with the actual name of your Cloud Storage bucket
+# This is where the static HTML files will be stored.
+GCS_BUCKET_NAME = os.environ.get('GCS_BUCKET_NAME', 'schale-text-only-portal-cache')
 
 # Initialize GCS client (outside the function for efficiency in warm starts)
 storage_client = storage.Client()
-cache_bucket = storage_client.bucket(CACHE_BUCKET_NAME)
+gcs_bucket = storage_client.bucket(GCS_BUCKET_NAME)
 
 # --- Static Links from Original Homepage ---
 # This content is hardcoded as it's static and comes from your provided homepage.html
@@ -187,7 +184,7 @@ def get_weather(city):
 def parse_rss_feed(url):
     """Fetches and parses an RSS feed."""
     print(f"Starting parse for RSS feed: {url} at {datetime.datetime.now()}")
-    articles = [] # FIX: Initialize articles here
+    articles = []
     feed_content = fetch_url_with_retry(url)
     if feed_content:
         feed = feedparser.parse(feed_content)
@@ -197,8 +194,6 @@ def parse_rss_feed(url):
             published_parsed = getattr(entry, 'published_parsed', None)
             published_date = None
             if published_parsed:
-                # feedparser's published_parsed is usually UTC.
-                # Convert to timezone-aware UTC datetime object.
                 published_date = datetime.datetime(*published_parsed[:6], tzinfo=datetime.timezone.utc)
             
             articles.append({
@@ -207,10 +202,10 @@ def parse_rss_feed(url):
                 'published': published_date,
                 'source': feed.feed.title if hasattr(feed.feed, 'title') else url
             })
-        print(f"Finished parse for RSS feed: {url} at {datetime.datetime.now()}") # Added log
+        print(f"Finished parse for RSS feed: {url} at {datetime.datetime.now()}")
     else:
-        print(f"Skipping parse for RSS feed: {url} due to fetch error.") # Added log
-    return articles # Ensure articles is always returned
+        print(f"Skipping parse for RSS feed: {url} due to fetch error.")
+    return articles
 
 def get_all_news():
     """Fetches and aggregates news from all configured RSS feeds."""
@@ -219,18 +214,13 @@ def get_all_news():
         articles = parse_rss_feed(feed_url)
         all_articles.extend(articles)
     
-    # Filter out articles without a valid published date
     all_articles = [a for a in all_articles if a['published']]
-    
-    # Sort by published date, newest first
     all_articles.sort(key=lambda x: x['published'], reverse=True)
     return all_articles
 
-# Helper to convert UTC datetime to Jakarta time (UTC+7)
 def convert_utc_to_jakarta(dt_utc):
     if dt_utc is None:
         return None
-    # Ensure dt_utc is timezone-aware (feedparser usually provides this)
     if dt_utc.tzinfo is None:
         dt_utc = dt_utc.replace(tzinfo=datetime.timezone.utc)
     
@@ -253,7 +243,7 @@ def generate_homepage_html(jakarta_weather, tokyo_weather, news_articles):
         a {{ color: #0000ee; text-decoration: none; }}
         a:hover {{ text-decoration: underline; }}
         .section {{ margin-bottom: 30px; }}
-        pre {{ white-space: pre-wrap; word-wrap: break-word; }} /* For wttr.in output */
+        pre {{ white-space: pre-wrap; word-wrap: break-word; }}
     </style>
 </head>
 <body>
@@ -273,9 +263,7 @@ def generate_homepage_html(jakarta_weather, tokyo_weather, news_articles):
         <ul>
     """.format(jakarta_weather=jakarta_weather, tokyo_weather=tokyo_weather)
 
-    # Add top 10 news articles
     for i, article in enumerate(news_articles[:10]):
-        # Format date for display, converting to Jakarta time
         display_date = "N/A"
         if article['published']:
             jakarta_time = convert_utc_to_jakarta(article['published'])
@@ -283,12 +271,10 @@ def generate_homepage_html(jakarta_weather, tokyo_weather, news_articles):
                 display_date = jakarta_time.strftime('%Y-%m-%d %H:%M')
         html_content += f"            <li>[{display_date}] <a href=\"{article['link']}\">{article['title']}</a> (Source: {article['source']})</li>\n"
     
-    # FIX: Updated hyperlink to include function name
     html_content += """        </ul>
-        <p><a href="/text-only-portal-function/news_archive.html">View All News (Last 72 Hours)</a></p>
+        <p><a href="/news_archive.html">View All News (Last 72 Hours)</a></p>
     </div>
 
-    <!-- Static Links Section from your original homepage.html -->
     """ + STATIC_LINKS_CONTENT + """
 </body>
 </html>"""
@@ -315,17 +301,15 @@ def generate_news_archive_html(news_articles):
 <body>
     <h1>All News from the Last 72 Hours</h1>
     <p>This page lists all aggregated news articles from the past 72 hours.</p>
-    <p><a href="/text-only-portal-function/">Back to Homepage</a></p> <!-- Added at top for convenience -->
+    <p><a href="/index.html">Back to Homepage</a></p>
 
     <div class="section">
         <ul>
     """
     
-    # FIX: Make now and seventy_two_hours_ago timezone-aware (UTC) for comparison
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
     seventy_two_hours_ago = now - datetime.timedelta(hours=72)
 
-    # Filter news for the last 72 hours
     recent_news = [
         article for article in news_articles 
         if article['published'] and article['published'] >= seventy_two_hours_ago
@@ -335,7 +319,6 @@ def generate_news_archive_html(news_articles):
         html_content += "            <li>No news found for the last 72 hours.</li>\n"
     else:
         for article in recent_news:
-            # Format date for display, converting to Jakarta time
             display_date = "N/A"
             if article['published']:
                 jakarta_time = convert_utc_to_jakarta(article['published'])
@@ -344,212 +327,40 @@ def generate_news_archive_html(news_articles):
             html_content += f"            <li>[{display_date}] <a href=\"{article['link']}\">{article['title']}</a> (Source: {article['source']})</li>\n"
     
     html_content += """        </ul>
-        <p><a href="/text-only-portal-function/">Back to Homepage</a></p>
+        <p><a href="/index.html">Back to Homepage</a></p>
     </div>
 </body>
 </html>"""
     return html_content
 
-# --- Caching Functions ---
-
-def get_cached_content(file_name):
+def update_static_site(event, context):
     """
-    Retrieves content from GCS cache.
-    Returns a tuple: (content, is_stale)
+    Background Cloud Function to generate and upload static HTML files to a GCS bucket.
+    This function is triggered by a Pub/Sub message from a Cloud Scheduler cron job.
     """
-    blob = cache_bucket.blob(file_name)
-    
-    if not blob.exists():
-        print(f"Cache miss: {file_name} does not exist.")
-        return None, False
-
+    print("Starting static site generation and upload...")
     try:
-        blob.reload()
-    except Exception as e:
-        print(f"Error reloading blob metadata for {file_name}: {e}. Treating as cache miss.")
-        return None, False
+        # Fetch data
+        jakarta_weather = get_weather("Jakarta")
+        tokyo_weather = get_weather("Tokyo")
+        all_news = get_all_news()
 
-    last_modified_utc = blob.updated
-    
-    if last_modified_utc is None:
-        print(f"Cache miss: {file_name} exists but has no valid 'updated' timestamp after reload.")
-        return None, False
+        # Generate HTML content
+        homepage_html = generate_homepage_html(jakarta_weather, tokyo_weather, all_news)
+        news_archive_html = generate_news_archive_html(all_news)
 
-    current_time_utc = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-    time_since_last_update = (current_time_utc - last_modified_utc).total_seconds()
-    
-    is_stale = time_since_last_update > CACHE_EXPIRATION_SECONDS
-    
-    if is_stale:
-        print(f"Cache is stale for {file_name}. Last updated {time_since_last_update:.0f} seconds ago.")
-        # Download and return the stale content
-        return blob.download_as_text(), True
-    
-    print(f"Cache hit for {file_name}. Last updated {time_since_last_update:.0f} seconds ago.")
-    return blob.download_as_text(), False
+        # Upload files to GCS
+        print(f"Uploading files to GCS bucket: {GCS_BUCKET_NAME}")
 
-def update_cache(homepage_html, news_archive_html):
-    """Uploads generated HTML content to GCS cache."""
-    print("Updating cache in Google Cloud Storage...")
-    try:
-        homepage_blob = cache_bucket.blob(CACHE_HOMEPAGE_FILE)
+        homepage_blob = gcs_bucket.blob('index.html')
         homepage_blob.upload_from_string(homepage_html, content_type='text/html')
-        print(f"Uploaded {CACHE_HOMEPAGE_FILE} to GCS.")
+        print("Uploaded index.html successfully.")
 
-        news_archive_blob = cache_bucket.blob(CACHE_NEWS_ARCHIVE_FILE)
+        news_archive_blob = gcs_bucket.blob('news_archive.html')
         news_archive_blob.upload_from_string(news_archive_html, content_type='text/html')
-        print(f"Uploaded {CACHE_NEWS_ARCHIVE_FILE} to GCS.")
-        return True
+        print("Uploaded news_archive.html successfully.")
+        
+        return 'Success!', 200
     except Exception as e:
-        print(f"Error updating cache: {e}")
-        return False
-
-# --- Main Logic for a Serverless Function ---
-
-def main_handler(request):
-    """
-    Main handler for the serverless function.
-    Handles both HTTP requests (user) and Pub/Sub triggers (cron job).
-    """
-    # Check if the request is from a Pub/Sub push (cron job)
-    if request.method == 'POST' and request.is_json:
-        try:
-            envelope = request.get_json()
-            if 'message' in envelope and 'data' in envelope['message']:
-                pubsub_message = json.loads(base64.b64decode(envelope['message']['data']).decode('utf-8'))
-                if pubsub_message.get('action') == 'update_cache':
-                    print("Received Pub/Sub trigger for cache update.")
-                    # Perform the expensive operations
-                    jakarta_weather = get_weather("Jakarta")
-                    tokyo_weather = get_weather("Tokyo")
-                    all_news = get_all_news()
-
-                    homepage_html = generate_homepage_html(jakarta_weather, tokyo_weather, all_news)
-                    news_archive_html = generate_news_archive_html(all_news)
-
-                    if update_cache(homepage_html, news_archive_html):
-                        return 'Cache updated successfully!', 200
-                    else:
-                        return 'Failed to update cache.', 500
-        except Exception as e:
-            print(f"Error processing Pub/Sub message: {e}")
-    
-    # Handle regular HTTP requests (user access)
-    path = request.path if hasattr(request, 'path') else '/'
-    
-    # Normalize path to remove function name prefix if present
-    function_name_prefix = '/text-only-portal-function'
-    if path.startswith(function_name_prefix):
-        path = path[len(function_name_prefix):]
-        if not path:
-            path = '/'
-
-    target_file = CACHE_HOMEPAGE_FILE if path == '/' else CACHE_NEWS_ARCHIVE_FILE
-    
-    # Use the new caching function
-    cached_content, is_stale = get_cached_content(target_file)
-
-    if cached_content:
-        # If cache is fresh or stale, return it immediately to the user
-        return cached_content, 200, {'Content-Type': 'text/html'}
-    else:
-        # If the cache is entirely missing, return a message and rely on the cron job
-        # to fill it. This prevents blocking a user's request for a long time.
-        print(f"Cache for {target_file} is completely missing. Awaiting next cron job.")
-        return "Content is not yet available. Please check back in a few minutes.", 200, {'Content-Type': 'text/html'}
-
-
-# --- Example Usage (for local testing/demonstration) ---
-# This part is for local testing and won't run in Cloud Functions directly
-if __name__ == '__main__':
-    # Mock GCS client for local testing
-    class MockBlob:
-        def __init__(self, name, content=None, updated=None):
-            self.name = name
-            self._content = content
-            self.updated = updated if updated else datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-
-        def exists(self):
-            return self._content is not None
-
-        def reload(self):
-            # For testing purposes, we'll simulate a stale cache by pretending it's old
-            # and a fresh cache by pretending it's new.
-            if self.name == CACHE_HOMEPAGE_FILE:
-                # Let's make the homepage stale for this test
-                self.updated = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc) - datetime.timedelta(minutes=15)
-            else:
-                self.updated = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-
-        def download_as_text(self):
-            return self._content
-
-        def upload_from_string(self, content, content_type):
-            self._content = content
-            self.updated = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-            print(f"Mock: Uploaded {self.name}")
-
-    class MockBucket:
-        def __init__(self, name):
-            self.name = name
-            self.blobs = {}
-
-        def blob(self, name):
-            if name not in self.blobs:
-                self.blobs[name] = MockBlob(name)
-            return self.blobs[name]
-    
-    class MockStorageClient:
-        def bucket(self, name):
-            return MockBucket(name)
-
-    # Override global storage_client for local testing
-    storage_client = MockStorageClient(CACHE_BUCKET_NAME)
-    cache_bucket = storage_client.bucket(CACHE_BUCKET_NAME)
-
-    # Simulate a cron job update to initially populate the cache
-    print("--- Simulating Cron Job Cache Update ---")
-    class MockPubSubRequest:
-        def __init__(self):
-            self.method = 'POST'
-            self.is_json = True
-        def get_json(self):
-            return {
-                'message': {
-                    'data': base64.b64encode(json.dumps({'action': 'update_cache'}).encode('utf-8')).decode('utf-8')
-                }
-            }
-    
-    # Run a cache update to create a mock cached file
-    # Note: This will still hit the real wttr.in and RSS feeds during this local test run
-    main_handler(MockPubSubRequest())
-    print("-" * 30)
-
-    # Simulate a user request for the homepage (which will now be stale in our mock)
-    print("--- Simulating User Request (Homepage with stale cache) ---")
-    class MockHttpRequest:
-        def __init__(self, path):
-            self.path = path
-            self.method = 'GET'
-            self.is_json = False
-        def get_json(self):
-            return None # Not a JSON request
-    
-    homepage_request = MockHttpRequest('/')
-    homepage_content, status, headers = main_handler(homepage_request)
-    # The output should be the stale cached content immediately
-    print(f"Status: {status}")
-    print("Content returned to user:")
-    print(homepage_content[:100] + "...")
-    print("-" * 30)
-
-    # Simulate a user request for the news archive
-    print("--- Simulating User Request (News Archive with fresh cache) ---")
-    news_archive_request = MockHttpRequest('/news_archive.html')
-    news_archive_content, status, headers = main_handler(news_archive_request)
-    # The output should be fresh cached content
-    print(f"Status: {status}")
-    print("Content returned to user:")
-    print(news_archive_content[:100] + "...")
-    print("-" * 30)
-
+        print(f"An error occurred: {e}")
+        return 'Error!', 500
