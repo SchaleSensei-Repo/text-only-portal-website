@@ -47,6 +47,21 @@ pipeline {
                 }
             }
         }
+        
+        stage('Enable App Engine API') {
+            steps {
+                script {
+                    echo 'Enabling App Engine API for Cloud Scheduler...'
+                    withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
+                        // Activate the service account
+                        bat "gcloud auth activate-service-account --key-file=%GCP_KEY_FILE%"
+
+                        // Enable the App Engine API to avoid the interactive prompt.
+                        bat "gcloud services enable appengine.googleapis.com --project=%PROJECT_ID%"
+                    }
+                }
+            }
+        }
 
         stage('Deploy Generator Cloud Function') {
             steps {
@@ -69,7 +84,8 @@ pipeline {
                         def pubsub_topic = "projects/${env.PROJECT_ID}/topics/${env.PUB_SUB_TOPIC}"
                         
                         // Command to create or update the cron job. Consolidated to a single line.
-                        bat "gcloud scheduler jobs create pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\" || gcloud scheduler jobs update pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
+                        // Added the --location flag.
+                        bat "gcloud scheduler jobs create pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\" || gcloud scheduler jobs update pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
                     }
                 }
             }
