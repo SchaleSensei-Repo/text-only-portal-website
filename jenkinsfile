@@ -87,17 +87,25 @@ pipeline {
                 script {
                     echo 'Setting up Cloud Scheduler cron job...'
                     withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
-                        // The Pub/Sub topic created by the Cloud Function deployment
                         def pubsub_topic = "projects/${env.PROJECT_ID}/topics/${env.PUB_SUB_TOPIC}"
                         
+                        // Check if the cron job exists first.
+                        def jobExists = false
                         try {
-                            // First, try to create the job. This will fail if it already exists.
-                            echo "Attempting to create a new cron job."
-                            bat "gcloud scheduler jobs create pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
+                            def result = bat(script: "gcloud scheduler jobs describe %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION%", returnStatus: true, label: "Check if cron job exists")
+                            if (result == 0) {
+                                jobExists = true
+                            }
                         } catch (Exception e) {
-                            // If create fails, it means the job already exists. Update it instead.
+                            echo "Cron job does not exist."
+                        }
+
+                        if (jobExists) {
                             echo "Cron job already exists. Updating it."
                             bat "gcloud scheduler jobs update pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
+                        } else {
+                            echo "Cron job does not exist. Creating a new one."
+                            bat "gcloud scheduler jobs create pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
                         }
                     }
                 }
