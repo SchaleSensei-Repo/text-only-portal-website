@@ -34,14 +34,24 @@ pipeline {
         stage('Create Pub/Sub Topic') {
             steps {
                 script {
-                    echo 'Creating the Pub/Sub topic...'
+                    echo 'Creating or ensuring the Pub/Sub topic exists...'
                     withCredentials([file(credentialsId: 'jenkins-butler', variable: 'GCP_KEY_FILE')]) {
                         // Activate the service account
                         bat "gcloud auth activate-service-account --key-file=%GCP_KEY_FILE%"
-                        
-                        // Create the Pub/Sub topic. This will fail if the topic already exists.
-                        // You can safely re-run this stage after the first success, but the build will fail.
-                        // This is intentional to ensure the topic creation is a one-time setup.
+
+                        // Try to delete the topic first, to ensure a clean state.
+                        // The 'gcloud' command will return a non-zero exit code if the topic doesn't exist,
+                        // which would normally fail the pipeline. We'll wrap this in a Groovy try/catch
+                        // to gracefully handle the case where the topic is new.
+                        try {
+                            echo "Attempting to delete existing Pub/Sub topic: ${env.PUB_SUB_TOPIC}"
+                            bat "gcloud pubsub topics delete %PUB_SUB_TOPIC% --project=%PROJECT_ID%"
+                        } catch (Exception e) {
+                            echo "Topic ${env.PUB_SUB_TOPIC} did not exist or could not be deleted. Proceeding to create it."
+                        }
+
+                        // Create the Pub/Sub topic.
+                        echo "Creating new Pub/Sub topic: ${env.PUB_SUB_TOPIC}"
                         bat "gcloud pubsub topics create %PUB_SUB_TOPIC% --project=%PROJECT_ID%"
                     }
                 }
