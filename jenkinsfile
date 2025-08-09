@@ -40,9 +40,6 @@ pipeline {
                         bat "gcloud auth activate-service-account --key-file=%GCP_KEY_FILE%"
 
                         // Try to delete the topic first, to ensure a clean state.
-                        // The 'gcloud' command will return a non-zero exit code if the topic doesn't exist,
-                        // which would normally fail the pipeline. We'll wrap this in a Groovy try/catch
-                        // to gracefully handle the case where the topic is new.
                         try {
                             echo "Attempting to delete existing Pub/Sub topic: ${env.PUB_SUB_TOPIC}"
                             bat "gcloud pubsub topics delete %PUB_SUB_TOPIC% --project=%PROJECT_ID%"
@@ -93,9 +90,15 @@ pipeline {
                         // The Pub/Sub topic created by the Cloud Function deployment
                         def pubsub_topic = "projects/${env.PROJECT_ID}/topics/${env.PUB_SUB_TOPIC}"
                         
-                        // Command to create or update the cron job. Consolidated to a single line.
-                        // Added the --location flag.
-                        bat "gcloud scheduler jobs create pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\" || gcloud scheduler jobs update pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
+                        try {
+                            // First, try to create the job. This will fail if it already exists.
+                            echo "Attempting to create a new cron job."
+                            bat "gcloud scheduler jobs create pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
+                        } catch (Exception e) {
+                            // If create fails, it means the job already exists. Update it instead.
+                            echo "Cron job already exists. Updating it."
+                            bat "gcloud scheduler jobs update pubsub %CRON_JOB_NAME% --project=%PROJECT_ID% --location=%REGION% --schedule=\"*/10 * * * *\" --topic=%pubsub_topic% --message-body=\"{\\\"action\\\": \\\"update_cache\\\"}\""
+                        }
                     }
                 }
             }
