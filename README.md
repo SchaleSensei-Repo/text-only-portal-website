@@ -11,7 +11,7 @@ Welcome to the **Text-Only Portal Website** – a project that explores just how
 
 ## 🌐 Live Demo
 
-Visit the portal:  
+Visit the portal (inactive for now):  
 **[https://text-only-portal-function-412268762612.asia-southeast2.run.app](https://text-only-portal-function-412268762612.asia-southeast2.run.app)**
 
 ## 🎯 Project Purpose
